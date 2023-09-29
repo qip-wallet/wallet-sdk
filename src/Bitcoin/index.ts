@@ -200,8 +200,12 @@ export class Bitcoin {
 
       let txSize = this.getTransactionSize({input: input.length, output:outFeeData, addressType: addressType})
       let txFee = txSize.txBytes * feeRate
+      console.log(txFee)
       if(totalAvailable - txFee - toSpend <= 550) return new Error("not enough sats in input for transaction")
       outputData.push({address:changeAddress, value: totalAvailable - toSpend - txFee})
+
+      let signedTx = this.signTransaction({input: inputData, output: outputData, addressType:addressType, networkName:networkName, privateKey:privateKey})
+      console.log(signedTx)
       
       return {
         input: inputData,
@@ -215,7 +219,7 @@ export class Bitcoin {
     }
   }
 
-  public signTransaction = async (transaction:TransactionDetails) => {
+  public signTransaction = (transaction:TransactionDetails) => {
     try{
       const network = this.getNetwork(transaction.networkName)
       let keyPair:any;
@@ -229,7 +233,7 @@ export class Bitcoin {
       }
       let psbt = new Psbt({network})
       .addInputs(transaction.input)
-      .addOutput(transaction.output)
+      .addOutputs(transaction.output)
       .signAllInputs(keyPair)
       .finalizeAllInputs();
       const txs = psbt.extractTransaction();
@@ -307,11 +311,6 @@ export class Bitcoin {
       let txSize = this.getTransactionSize({input: input.length, output:outFeeData, addressType: addressType})
       let txFee = txSize.txBytes * feeRate
       if(availableInput < txFee + amount + 550) throw new Error("available balance is not sufficient for transaction")
-      output.push({
-        address:changeAddress,
-        value:availableInput - txFee - amount
-      })
-
       let transactionDetails;
 
       if(privateKey){
@@ -654,12 +653,12 @@ export class Bitcoin {
 
 //let bitcoin = new Bitcoin()
 //console.log(bitcoin.createPassPhrase())
-//console.log(bitcoin.createAddress({privateKey: "96346ed8a28b9c0dde05604fcb6169df", networkName:"testnet", addressType: "taproot"}))
+//console.log(bitcoin.createAddress({privateKey: "96346ed8a28b9c0dde05604fcb6169df", networkName:"testnet", addressType: "segwit"}))
 //bitcoin.getFeeRate("mainnet").then(res=> console.log(res)).catch()
 //console.log(bitcoin.getAddressType({address:"1KdREt8JvPcr4JSN1kFVbQ6jKLVprBFVnC",networkName: "mainnet"}))
 //console.log(bitcoin.getTransactionSize({input:5, output:[{outputType: "P2TR", count: 2},{outputType: "P2PKH", count: 2}], addressType: "segwit"}))
 //bitcoin.getInputData("legacy", [{txid:"78beab4a2b940fd0dfac7987cd0acd89fdb862545f795a7ef4f7cd679251fb72", vout:1}], "mainnet", {privateKey: "96346ed8a28b9c0dde05604fcb6169df"}).then(res=>{console.log(res)}).catch()
-//bitcoin.getUtxo({networkName:"mainnet", address:"bc1padzcq6u7jh833v7gwgq7dlzqqmhuyp0plhm20f0nnjgmg0rxjjqqsq9a5t"}).then(res=>console.log(res)).catch()
+//bitcoin.getUtxo({networkName:"testnet", address:"tb1q92s4d7f890y80q4nts72hcx8ssvyh44dj037qv"}).then(res=>console.log(res)).catch()
 // bitcoin.createTransaction({
 //   input:[{txid:"27bfa9c4164744e2a8f245de93100495974d812612441061189ab0904b235c10", vout:0, value:24606}, {txid:"0f53820e0443bf49489040b00663b2920d4376165a0843a0210b1ba0d11a9a81", vout:2, value:24991}], 
 //   output:[{address:"bc1padzcq6u7jh833v7gwgq7dlzqqmhuyp0plhm20f0nnjgmg0rxjjqqsq9a5t", value:10000}, {address:"1KdREt8JvPcr4JSN1kFVbQ6jKLVprBFVnC", value:15000}],
@@ -676,10 +675,10 @@ export class Bitcoin {
 
 
 // bitcoin.createSingleTransaction({
-//   receiver:"bc1padzcq6u7jh833v7gwgq7dlzqqmhuyp0plhm20f0nnjgmg0rxjjqqsq9a5t",
-//   amount: 10000,
+//   receiver:"tb1q92s4d7f890y80q4nts72hcx8ssvyh44dj037qv",
+//   amount: 1000,
 //   privateKey: "96346ed8a28b9c0dde05604fcb6169df",
-//   addressType:"segwit",
-//   networkName:"mainnet",
+//   addressType:"taproot",
+//   networkName:"testnet",
 //   feeRate: 10
 // }).then(res=> console.log(res)).catch()
