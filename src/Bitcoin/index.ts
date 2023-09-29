@@ -1,4 +1,3 @@
-import {bitcore, Networks} from "bitcore-lib";
 import * as Mnemonic from "bitcore-mnemonic";
 import {
     initEccLib,
@@ -6,17 +5,13 @@ import {
     crypto,
     payments,
     Psbt,
-    address,
-    script,
 } from "bitcoinjs-lib";
 import * as tinysecp from "tiny-secp256k1";
 import  { ECPairFactory } from "ecpair";
 import mempoolJS from "@mempool/mempool.js";
 import {bech32m, bech32} from 'bech32';
 import { AccountConfig, AddressConfig, Key, TransactionDetails } from "./types";
-import { testnet } from "bitcoinjs-lib/src/networks";
 
-//const { Networks } = bitcore;
 initEccLib(tinysecp);
 const ECPair = ECPairFactory(tinysecp);
 
@@ -88,7 +83,7 @@ export class Bitcoin {
   };
 
 
-  public init = async (network: string) => {
+  protected init = async (network: string) => {
     const {
       bitcoin: { addresses, fees, transactions },
     } = mempoolJS({
@@ -203,9 +198,6 @@ export class Bitcoin {
       console.log(txFee)
       if(totalAvailable - txFee - toSpend <= 550) return new Error("not enough sats in input for transaction")
       outputData.push({address:changeAddress, value: totalAvailable - toSpend - txFee})
-
-      let signedTx = this.signTransaction({input: inputData, output: outputData, addressType:addressType, networkName:networkName, privateKey:privateKey})
-      console.log(signedTx)
       
       return {
         input: inputData,
@@ -213,35 +205,6 @@ export class Bitcoin {
         transactionFee: txFee,
         transactionSize: txSize,
         totalSpent: toSpend + txFee
-      }
-    }catch(e){
-      throw new Error(e.message)
-    }
-  }
-
-  public signTransaction = (transaction:TransactionDetails) => {
-    try{
-      const network = this.getNetwork(transaction.networkName)
-      let keyPair:any;
-      if(transaction.privateKey){
-        keyPair = ECPair.fromPrivateKey(Buffer.from(transaction.privateKey), {network})
-      }else if(transaction.wif){
-        keyPair = ECPair.fromWIF(transaction.wif, network)
-      }
-      if(transaction.addressType === "taproot"){
-        keyPair = this.tweakSigner(keyPair, network)
-      }
-      let psbt = new Psbt({network})
-      .addInputs(transaction.input)
-      .addOutputs(transaction.output)
-      .signAllInputs(keyPair)
-      .finalizeAllInputs();
-      const txs = psbt.extractTransaction();
-      const txHex = txs.toHex();
-
-      return {
-        txHex: txHex,
-        signedTransaction:txs
       }
     }catch(e){
       throw new Error(e.message)
@@ -338,8 +301,37 @@ export class Bitcoin {
     }
   }
 
+  public signTransaction = (transaction:TransactionDetails) => {
+    try{
+      const network = this.getNetwork(transaction.networkName)
+      let keyPair:any;
+      if(transaction.privateKey){
+        keyPair = ECPair.fromPrivateKey(Buffer.from(transaction.privateKey), {network})
+      }else if(transaction.wif){
+        keyPair = ECPair.fromWIF(transaction.wif, network)
+      }
+      if(transaction.addressType === "taproot"){
+        keyPair = this.tweakSigner(keyPair, network)
+      }
+      let psbt = new Psbt({network})
+      .addInputs(transaction.input)
+      .addOutputs(transaction.output)
+      .signAllInputs(keyPair)
+      .finalizeAllInputs();
+      const txs = psbt.extractTransaction();
+      const txHex = txs.toHex();
+
+      return {
+        txHex: txHex,
+        signedTransaction:txs
+      }
+    }catch(e){
+      throw new Error(e.message)
+    }
+  }
+
   //input = [{txid: "", vout: 2, value: 20000}, {txid: "", vout: 0, value: 20000}]
-  public getInputData = async (addressType: string, input:any, networkName:string, privateKey?:string, wif?:string) => {
+  protected getInputData = async (addressType: string, input:any, networkName:string, privateKey?:string, wif?:string) => {
     try{
       let{transactions} = await this.init(networkName)
       let network = this.getNetwork(networkName)
@@ -469,14 +461,6 @@ export class Bitcoin {
     } else if (networkName === "testnet") {
       return networks.testnet;
     }
-  };
-  
-  protected getKeyPair = (privateKey, networkName:string) => {
-    const p_key = privateKey.slice(0, 32);
-    const network = this.getNetwork(networkName);
-    return ECPair.fromPrivateKey(Buffer.from(p_key), {
-      network,
-    });
   };
 
   //Address validation helpers
