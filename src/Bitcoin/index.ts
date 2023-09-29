@@ -124,7 +124,7 @@ export class Bitcoin {
   }
 
   //Transaction Methods
-  public getUtxo = async (networkName: string, address:string) => {
+  public getUtxo = async ({networkName, address}:{networkName: string, address:string}) => {
     try{
       const { addresses } = await this.init(networkName);
       let response = await addresses.getAddressTxsUtxo({ address: address });
@@ -144,13 +144,110 @@ export class Bitcoin {
     }
   }
 
-  public getTransactionDetails = async (txid: string, networkName: string) => {
+  public getTransactionDetails = async ({txid,networkName}:{txid: string, networkName: string}) => {
     try{
       let {transactions} = await this.init(networkName)
       let txDetails = await transactions.getTx({txid: txid})
       return txDetails
     }catch(e){
       throw new Error(e.message)
+    }
+  }
+
+  //input = [{txid: "", vout: 2, value: 20000}, {txid: "", vout: 0, value: 20000}]
+  //output = [{address: "", value:32000}]
+  public createTransaction = async ({input, output, addressType, networkName, key }:{input:any, output:any, key:Key, addressType:string, networkName:string}) => {
+    try{
+      let inputData = await this.getInputData(addressType,input,networkName,key)
+      let changeAddressType;
+      let outPutFeeDetails = new Map();
+      let outFeeData = output
+      if(key.privateKey){
+        changeAddressType = this.createAddress({addressType:addressType, networkName:networkName, privateKey:key.privateKey})
+      }else if(key.privateKey){
+        changeAddressType = this.createAddress({addressType:addressType, networkName:networkName, wif:key.wif})
+      }
+      
+      
+      
+      let outputData = []
+
+      output.forEach(x =>{
+        let outputType = this.getAddressType({address: x.address, networkName:x.networkName})
+        if(!outPutFeeDetails.has(outputType)){
+          outPutFeeDetails.set(outputType,1)
+        }else{
+          outPutFeeDetails.set(outputType, outPutFeeDetails.get(outputType)+1)
+        }
+      })
+
+      outPutFeeDetails.forEach((value, key) => {
+        outFeeData.push({
+          outputType: key,
+          count: value
+        })
+      })
+
+      
+    }catch(e){
+      
+    }
+  }
+
+  //input = [{txid: "", vout: 2, value: 20000}, {txid: "", vout: 0, value: 20000}]
+  public getInputData = async (addressType: string, input:any, networkName:string, key:Key) => {
+    try{
+      let{transactions} = await this.init(networkName)
+      let network = this.getNetwork(networkName)
+      let keyPair;
+      let inData;
+      let inputTx = await Promise.all(input.map(async(item)=>{
+        return {tx: await transactions.getTx({txid:item.txid}), vout: item.vout}
+      }))
+      
+      switch (addressType){
+        case "legacy":
+          let tx = await Promise.all(input.map(async(x)=>{
+            return {txHex: Buffer.from(await transactions.getTxHex({txid:x.txid}), "hex"), hash: x.txid, index:x.vout}
+          }))
+          inData = tx.map(async (x) =>{
+            return {
+              hash:x.hash,
+              index:x.index,
+              nonWitnessUtxo: x.txHex
+            }
+          })
+          break
+        case "segwit":
+          inData = inputTx.map((x) =>{
+            return {
+              hash:x.tx.txid,
+              index:x.vout,
+              witnessUtxo: {value: x.tx.vout[x.vout].value, script: Buffer.from(x.tx.vout[x.vout].scriptpubkey, "hex")}
+            }
+          })
+          break
+        case "taproot":
+          if(key.privateKey){
+            keyPair = ECPair.fromPrivateKey(Buffer.from(key.privateKey), {network})
+          }else if(key.wif){
+            keyPair = ECPair.fromWIF(key.wif, network)
+          }
+          let tweakedSigner = this.tweakSigner(keyPair, { network });
+          inData = inputTx.map((x) =>{
+            return {
+              hash:x.tx.txid,
+              index:x.vout,
+              witnessUtxo: {value: x.tx.vout[x.vout].value, script: Buffer.from(x.tx.vout[x.vout].scriptpubkey, "hex")},
+              tapInternalKey: this.toXOnly(tweakedSigner.publicKey)
+            }
+          })
+          break
+      }
+
+      return inData
+    }catch(e){
+
     }
   }
 
@@ -419,3 +516,4 @@ let bitcoin = new Bitcoin()
 //bitcoin.getFeeRate("mainnet").then(res=> console.log(res)).catch()
 //console.log(bitcoin.getAddressType({address:"tb1qt0lenzqp8ay0ryehj7m3wwuds240mzhgdhqp4c",networkName: "testnet"}))
 //console.log(bitcoin.getTransactionSize({input:5, output:[{outputType: "P2TR", count: 2},{outputType: "P2PKH", count: 2}], addressType: "segwit"}))
+bitcoin.getInputData("legacy", [{txid:"78beab4a2b940fd0dfac7987cd0acd89fdb862545f795a7ef4f7cd679251fb72", vout:1}], "mainnet", {privateKey: "96346ed8a28b9c0dde05604fcb6169df"}).then(res=>{console.log(res)}).catch()
