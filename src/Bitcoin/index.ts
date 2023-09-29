@@ -90,21 +90,6 @@ export class Bitcoin {
     }
   };
 
-  protected getNetwork = (networkName:string) => {
-    if (networkName === "mainnet") {
-      return networks.bitcoin;
-    } else if (networkName === "testnet") {
-      return networks.testnet;
-    }
-  };
-  
-  protected getKeyPair = (privateKey, networkName:string) => {
-    const p_key = privateKey.slice(0, 32);
-    const network = this.getNetwork(networkName);
-    return ECPair.fromPrivateKey(Buffer.from(p_key), {
-      network,
-    });
-  };
 
   public init = async (network: string) => {
     const {
@@ -240,6 +225,21 @@ export class Bitcoin {
     }
   }
 
+  protected getNetwork = (networkName:string) => {
+    if (networkName === "mainnet") {
+      return networks.bitcoin;
+    } else if (networkName === "testnet") {
+      return networks.testnet;
+    }
+  };
+  
+  protected getKeyPair = (privateKey, networkName:string) => {
+    const p_key = privateKey.slice(0, 32);
+    const network = this.getNetwork(networkName);
+    return ECPair.fromPrivateKey(Buffer.from(p_key), {
+      network,
+    });
+  };
 
   //Address validation helpers
   protected mainnetAddressType = (address:string, networkName:string) => {
