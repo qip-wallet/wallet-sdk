@@ -1,0 +1,33 @@
+{
+  "name": "qip-wallet-sdk",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "module": "dist/index.m.js",
+  "unpkg": "dist/index.umd.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "rm -rf dist && microbundle --tsconfig tsconfig.json --no-sourcemap"
+  },
+  "keywords": [
+    "qip"
+  ],
+  "author": "Joshua Obigwe (blok-hamster)",
+  "license": "ISC",
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "microbundle": "^0.15.1"
+  },
+  "dependencies": {
+    "@mempool/mempool.js": "^2.3.0",
+    "bech32": "^2.0.0",
+    "bitcoinjs-lib": "^6.1.0",
+    "bitcore-lib": "^10.0.0",
+    "bitcore-mnemonic": "^10.0.0",
+    "ecpair": "^2.1.0",
+    "ethers": "^5.7.2",
+    "tiny-secp256k1": "^2.2.3"
+  }
+}
