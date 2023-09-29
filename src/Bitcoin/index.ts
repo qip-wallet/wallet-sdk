@@ -13,8 +13,7 @@ import * as tinysecp from "tiny-secp256k1";
 import  { ECPairFactory } from "ecpair";
 import mempoolJS from "@mempool/mempool.js";
 import {bech32m, bech32} from 'bech32';
-import { AccountConfig, AddressConfig, Key } from "./types";
-import { number } from "bitcoinjs-lib/src/script";
+import { AccountConfig, AddressConfig, Key, TransactionDetails } from "./types";
 import { testnet } from "bitcoinjs-lib/src/networks";
 
 //const { Networks } = bitcore;
@@ -81,8 +80,6 @@ export class Bitcoin {
           address = p2wpkh.address ?? "";
           script = p2wpkh.output;
           break
-        default:
-          return "Invalid address type provided"
       }
       return { address: address, script: script};
     } catch (e) {
@@ -112,8 +109,6 @@ export class Bitcoin {
         case "testnet":
           addressType = this.testnetAddressType(address)
           break
-        default :
-          return "Invalid network"
       }
 
       if(addressType == null) return `invalid ${networkName} address`
@@ -128,7 +123,14 @@ export class Bitcoin {
     try{
       const { addresses } = await this.init(networkName);
       let response = await addresses.getAddressTxsUtxo({ address: address });
-      return response;
+      let utxos = response.map(x => {
+        return{
+          txid: x.txid,
+          vout: x.vout,
+          value: x.value
+        }
+      })
+      return utxos
     }catch(e){
       throw new Error(e.message)
     }
@@ -156,24 +158,32 @@ export class Bitcoin {
 
   //input = [{txid: "", vout: 2, value: 20000}, {txid: "", vout: 0, value: 20000}]
   //output = [{address: "", value:32000}]
-  public createTransaction = async ({input, output, addressType, networkName, key }:{input:any, output:any, key:Key, addressType:string, networkName:string}) => {
-    try{
-      let inputData = await this.getInputData(addressType,input,networkName,key)
-      let changeAddressType;
+  public createTransaction = async ({input, output, addressType, networkName, feeRate, privateKey, wif }:{input:any, output:any, addressType:string, networkName:string, feeRate:number, privateKey?:string, wif?:string}) => {
+    try{ 
+      let inputData = await this.getInputData(addressType,input,networkName,privateKey,wif)
+      let outputData = output
+      let totalAvailable = 0;
+      let toSpend = 0;
+      let changeAddress:string;
       let outPutFeeDetails = new Map();
-      let outFeeData = output
-      if(key.privateKey){
-        changeAddressType = this.createAddress({addressType:addressType, networkName:networkName, privateKey:key.privateKey})
-      }else if(key.privateKey){
-        changeAddressType = this.createAddress({addressType:addressType, networkName:networkName, wif:key.wif})
+      let outFeeData = [];
+      if(privateKey){
+        changeAddress = this.createAddress({addressType:addressType, networkName:networkName, privateKey:privateKey}).address;
+        let changeAddressType = this.getAddressType({address:changeAddress, networkName:networkName})
+        outPutFeeDetails.set(changeAddressType, 1)
+      }else if(privateKey){
+        changeAddress = this.createAddress({addressType:addressType, networkName:networkName, wif:wif}).address
+        let changeAddressType = this.getAddressType({address:changeAddress, networkName:networkName})
+        outPutFeeDetails.set(changeAddressType, 1)
       }
-      
-      
-      
-      let outputData = []
+
+      input.forEach(x => {
+        totalAvailable = totalAvailable + x.value
+      })
 
       output.forEach(x =>{
-        let outputType = this.getAddressType({address: x.address, networkName:x.networkName})
+        let outputType = this.getAddressType({address: x.address, networkName:networkName})
+        toSpend = toSpend + x.value
         if(!outPutFeeDetails.has(outputType)){
           outPutFeeDetails.set(outputType,1)
         }else{
@@ -188,18 +198,153 @@ export class Bitcoin {
         })
       })
 
+      let txSize = this.getTransactionSize({input: input.length, output:outFeeData, addressType: addressType})
+      let txFee = txSize.txBytes * feeRate
+      if(totalAvailable - txFee - toSpend <= 550) return new Error("not enough sats in input for transaction")
+      outputData.push({address:changeAddress, value: totalAvailable - toSpend - txFee})
       
+      return {
+        input: inputData,
+        output: outputData,
+        transactionFee: txFee,
+        transactionSize: txSize,
+        totalSpent: toSpend + txFee
+      }
     }catch(e){
+      throw new Error(e.message)
+    }
+  }
+
+  public signTransaction = async (transaction:TransactionDetails) => {
+    try{
+      const network = this.getNetwork(transaction.networkName)
+      let keyPair:any;
+      if(transaction.privateKey){
+        keyPair = ECPair.fromPrivateKey(Buffer.from(transaction.privateKey), {network})
+      }else if(transaction.wif){
+        keyPair = ECPair.fromWIF(transaction.wif, network)
+      }
+      if(transaction.addressType === "taproot"){
+        keyPair = this.tweakSigner(keyPair, network)
+      }
+      let psbt = new Psbt({network})
+      .addInputs(transaction.input)
+      .addOutput(transaction.output)
+      .signAllInputs(keyPair)
+      .finalizeAllInputs();
+      const txs = psbt.extractTransaction();
+      const txHex = txs.toHex();
+
+      return {
+        txHex: txHex,
+        signedTransaction:txs
+      }
+    }catch(e){
+      throw new Error(e.message)
+    }
+  }
+
+  public createSingleTransaction = async ({receiver,amount,addressType,networkName,feeRate,privateKey, wif}:{receiver:string,amount:number,addressType:string,networkName:string,feeRate:number,privateKey?:string, wif?:string}) => {
+    try{
+      //let outputData = output
+      let input = [];
+      let output = []
+      let availableInput = 0
+      let changeAddress:string;
+      let outPutFeeDetails = new Map();
+      let outFeeData = [];
       
+      output.push({
+        address:receiver,
+        value:amount
+      })
+      
+      if(privateKey){
+        changeAddress = this.createAddress({addressType:addressType, networkName:networkName, privateKey:privateKey}).address;
+        let changeAddressType = this.getAddressType({address:changeAddress, networkName:networkName})
+        outPutFeeDetails.set(changeAddressType, 1)
+      }else if(wif){
+        changeAddress = this.createAddress({addressType:addressType, networkName:networkName, wif:wif}).address
+        let changeAddressType = this.getAddressType({address:changeAddress, networkName:networkName})
+        outPutFeeDetails.set(changeAddressType, 1)
+      }
+
+      outPutFeeDetails.forEach((value, key) => {
+        outFeeData.push({
+          outputType: key,
+          count: value
+        })
+      })
+
+
+      let utxos = await this.getUtxo({networkName:networkName, address:changeAddress})
+      
+      for(let i = 0; i < utxos.length; i++){
+        let inputCount = 0
+        if(input.length > 0){
+          inputCount = input.length
+        }
+        availableInput = availableInput + utxos[i].value
+        let txSize = this.getTransactionSize({input: inputCount, output:outFeeData, addressType: addressType})
+        let txFee = txSize.txBytes * feeRate
+        if(availableInput - txFee - amount < 550){
+          input.push({
+            txid: utxos[i].txid,
+            vout: utxos[i].vout,
+            value: utxos[i].value
+          })
+          continue;
+        }else{
+          input.push({
+            txid: utxos[i].txid,
+            vout: utxos[i].vout,
+            value: utxos[i].value
+          })
+          break;
+        }
+      }
+
+      let txSize = this.getTransactionSize({input: input.length, output:outFeeData, addressType: addressType})
+      let txFee = txSize.txBytes * feeRate
+      if(availableInput < txFee + amount + 550) throw new Error("available balance is not sufficient for transaction")
+      output.push({
+        address:changeAddress,
+        value:availableInput - txFee - amount
+      })
+
+      let transactionDetails;
+
+      if(privateKey){
+          transactionDetails = await this.createTransaction({
+          input:input, 
+          output:output, 
+          addressType:addressType, 
+          networkName:networkName,
+          feeRate:feeRate,
+          privateKey
+        })
+      }else if(wif){
+        transactionDetails = await this.createTransaction({
+          input:input, 
+          output:output, 
+          addressType:addressType, 
+          networkName:networkName,
+          feeRate:feeRate,
+          privateKey
+        })
+      }
+      return transactionDetails;
+    }catch(e){
+      throw new Error(e.message)
     }
   }
 
   //input = [{txid: "", vout: 2, value: 20000}, {txid: "", vout: 0, value: 20000}]
-  public getInputData = async (addressType: string, input:any, networkName:string, key:Key) => {
+  public getInputData = async (addressType: string, input:any, networkName:string, privateKey?:string, wif?:string) => {
     try{
       let{transactions} = await this.init(networkName)
       let network = this.getNetwork(networkName)
-      let keyPair;
+      let keyPair:any;
       let inData;
       let inputTx = await Promise.all(input.map(async(item)=>{
         return {tx: await transactions.getTx({txid:item.txid}), vout: item.vout}
@@ -228,10 +373,10 @@ export class Bitcoin {
           })
           break
         case "taproot":
-          if(key.privateKey){
-            keyPair = ECPair.fromPrivateKey(Buffer.from(key.privateKey), {network})
-          }else if(key.wif){
-            keyPair = ECPair.fromWIF(key.wif, network)
+          if(privateKey){
+            keyPair = ECPair.fromPrivateKey(Buffer.from(privateKey), {network})
+          }else if(wif){
+            keyPair = ECPair.fromWIF(wif, network)
           }
           let tweakedSigner = this.tweakSigner(keyPair, { network });
           inData = inputTx.map((x) =>{
@@ -244,7 +389,6 @@ export class Bitcoin {
           })
           break
       }
-
       return inData
     }catch(e){
 
@@ -301,8 +445,6 @@ export class Bitcoin {
         case "legacy":
           inputScript = "P2PKH"
           inputSize = P2PKH_IN_SIZE
-        default:
-          return "Invalid address type provided"
       }
 
       let txVBytes = this.getTxOverheadVBytes(inputScript, input, output.length) +
@@ -510,10 +652,34 @@ export class Bitcoin {
   }
 }
 
-let bitcoin = new Bitcoin()
+//let bitcoin = new Bitcoin()
 //console.log(bitcoin.createPassPhrase())
-//console.log(bitcoin.createAddress({privateKey: "96346ed8a28b9c0dde05604fcb6169df", networkName:"testnet", addressType: "segwit"}))
+//console.log(bitcoin.createAddress({privateKey: "96346ed8a28b9c0dde05604fcb6169df", networkName:"testnet", addressType: "taproot"}))
 //bitcoin.getFeeRate("mainnet").then(res=> console.log(res)).catch()
-//console.log(bitcoin.getAddressType({address:"tb1qt0lenzqp8ay0ryehj7m3wwuds240mzhgdhqp4c",networkName: "testnet"}))
+//console.log(bitcoin.getAddressType({address:"1KdREt8JvPcr4JSN1kFVbQ6jKLVprBFVnC",networkName: "mainnet"}))
 //console.log(bitcoin.getTransactionSize({input:5, output:[{outputType: "P2TR", count: 2},{outputType: "P2PKH", count: 2}], addressType: "segwit"}))
-bitcoin.getInputData("legacy", [{txid:"78beab4a2b940fd0dfac7987cd0acd89fdb862545f795a7ef4f7cd679251fb72", vout:1}], "mainnet", {privateKey: "96346ed8a28b9c0dde05604fcb6169df"}).then(res=>{console.log(res)}).catch()
+//bitcoin.getInputData("legacy", [{txid:"78beab4a2b940fd0dfac7987cd0acd89fdb862545f795a7ef4f7cd679251fb72", vout:1}], "mainnet", {privateKey: "96346ed8a28b9c0dde05604fcb6169df"}).then(res=>{console.log(res)}).catch()
+//bitcoin.getUtxo({networkName:"mainnet", address:"bc1padzcq6u7jh833v7gwgq7dlzqqmhuyp0plhm20f0nnjgmg0rxjjqqsq9a5t"}).then(res=>console.log(res)).catch()
+// bitcoin.createTransaction({
+//   input:[{txid:"27bfa9c4164744e2a8f245de93100495974d812612441061189ab0904b235c10", vout:0, value:24606}, {txid:"0f53820e0443bf49489040b00663b2920d4376165a0843a0210b1ba0d11a9a81", vout:2, value:24991}], 
+//   output:[{address:"bc1padzcq6u7jh833v7gwgq7dlzqqmhuyp0plhm20f0nnjgmg0rxjjqqsq9a5t", value:10000}, {address:"1KdREt8JvPcr4JSN1kFVbQ6jKLVprBFVnC", value:15000}],
+//   privateKey: "96346ed8a28b9c0dde05604fcb6169df",
+//   addressType:"segwit",
+//   networkName:"mainnet",
+//   feeRate: 10
+// }).then(res=> console.log(res)).catch()
+
+
+//input
+//[{txid:"27bfa9c4164744e2a8f245de93100495974d812612441061189ab0904b235c10", vout:0, value:24606}, {txid:"0f53820e0443bf49489040b00663b2920d4376165a0843a0210b1ba0d11a9a81", vout:2, value:24991}]
+//[{address:"bc1padzcq6u7jh833v7gwgq7dlzqqmhuyp0plhm20f0nnjgmg0rxjjqqsq9a5t", value:10000}, {address:"1KdREt8JvPcr4JSN1kFVbQ6jKLVprBFVnC", value:20000}]
+
+
+// bitcoin.createSingleTransaction({
+//   receiver:"bc1padzcq6u7jh833v7gwgq7dlzqqmhuyp0plhm20f0nnjgmg0rxjjqqsq9a5t",
+//   amount: 10000,
+//   privateKey: "96346ed8a28b9c0dde05604fcb6169df",
+//   addressType:"segwit",
+//   networkName:"mainnet",
+//   feeRate: 10
+// }).then(res=> console.log(res)).catch()
